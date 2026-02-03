@@ -6,7 +6,6 @@ export default function VideoEditor() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0); // Virtual time
-  const [totalDuration, setTotalDuration] = useState(0); // Sum of all segments
   
   // Editor state
   interface Segment {
@@ -30,9 +29,23 @@ export default function VideoEditor() {
   const [debugInfo, setDebugInfo] = useState('');
   const [canvasWidth, setCanvasWidth] = useState(window.innerWidth);
   
+  // Calculate actual canvas width with browser limit safeguard
+  const MAX_CANVAS_WIDTH = 16384; // Browser canvas size limit
+  const actualCanvasWidth = Math.min(canvasWidth * zoomLevel, MAX_CANVAS_WIDTH);
+  const effectiveZoom = actualCanvasWidth / canvasWidth;
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Cleanup object URL on unmount
+  useEffect(() => {
+    return () => {
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl);
+      }
+    };
+  }, [videoUrl]);
 
   // Handle window resize to update canvas width
   useEffect(() => {
@@ -52,6 +65,10 @@ export default function VideoEditor() {
       setDebugInfo(`File: ${file.name}, Type: ${file.type}, Size: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
       setError(null);
       setVideoFile(file);
+      // Revoke previous URL to prevent memory leak
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl);
+      }
       const url = URL.createObjectURL(file);
       setVideoUrl(url);
       setSegments([]);
@@ -81,9 +98,9 @@ export default function VideoEditor() {
   // Generate waveform when video loads
   const handleVideoLoaded = () => {
     const video = videoRef.current;
+    if (!video) return;
     console.log('Video loaded! Duration:', video.duration, 'Ready state:', video.readyState);
     setDebugInfo(prev => prev + ' | Video loaded successfully');
-    setTotalDuration(video.duration);
     setSegments([{ start: 0, end: video.duration }]);
     setError(null);
   };
@@ -136,9 +153,10 @@ export default function VideoEditor() {
       setWaveformSamples(normalized);
       setDebugInfo(prev => prev + ' | Waveform generated via AudioBuffer');
       
-    } catch (error) {
-      console.error('Error generating waveform:', error);
-      setError('Waveform generation failed: ' + error.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('Error generating waveform:', err);
+      setError('Waveform generation failed: ' + message);
       setWaveformSamples([]);
     }
     
@@ -232,10 +250,10 @@ export default function VideoEditor() {
     ctx.lineTo(playheadX, height);
     ctx.stroke();
 
-  }, [waveformSamples, currentTime, segments, selection, zoomLevel]);
+  }, [waveformSamples, currentTime, segments, selection, actualCanvasWidth]);
 
   // Convert virtual time to source time and segment index
-  const getSourceFromVirtual = (vTime) => {
+  const getSourceFromVirtual = (vTime: number): { sourceTime: number; segmentIndex: number } => {
     let accumulated = 0;
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
@@ -321,7 +339,7 @@ export default function VideoEditor() {
   };
 
   // Seek functions
-  const seekVirtual = (delta) => {
+  const seekVirtual = (delta: number) => {
     const vDuration = getVirtualDuration();
     const newVirtual = Math.max(0, Math.min(vDuration, currentTime + delta));
     
@@ -338,7 +356,7 @@ export default function VideoEditor() {
   const seekToStart = () => seekVirtual(-currentTime);
 
   // Click on waveform to seek
-  const handleWaveformClick = (e) => {
+  const handleWaveformClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || segments.length === 0) return;
     
     const canvas = canvasRef.current;
@@ -356,7 +374,7 @@ export default function VideoEditor() {
   };
   
   // Selection handling
-  const handleSelection = (direction) => { // 1 for right, -1 for left
+  const handleSelection = (direction: 1 | -1) => { // 1 for right, -1 for left
     const step = 0.1; // Selection granularity
     
     if (!selection) {
@@ -475,7 +493,7 @@ export default function VideoEditor() {
     const vDuration = getVirtualDuration();
     if (vDuration === 0) return;
     
-    const waveformWidth = canvasWidth * zoomLevel;
+    const waveformWidth = actualCanvasWidth;
     const playheadX = (currentTime / vDuration) * waveformWidth;
     
     const scrollLeft = container.scrollLeft;
@@ -485,12 +503,12 @@ export default function VideoEditor() {
     if (playheadX < scrollLeft || playheadX > scrollLeft + clientWidth) {
       container.scrollLeft = playheadX - (clientWidth / 2);
     }
-  }, [currentTime, zoomLevel, segments, canvasWidth]);
+  }, [currentTime, actualCanvasWidth, segments]);
 
   // Keyboard shortcuts
   useEffect(() => {
-    const handleKeyPress = (e) => {
-      if (e.target.tagName === 'INPUT') return;
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
 
       switch(e.key.toLowerCase()) {
         case ' ':
@@ -504,10 +522,15 @@ export default function VideoEditor() {
         case 'backspace':
           handleDelete();
           break;
+        case 'escape':
+          setSelection(null);
+          break;
         case 'arrowleft':
           e.preventDefault();
           if (e.shiftKey) {
             handleSelection(-1);
+          } else if (e.ctrlKey) {
+            seekVirtual(-0.033); // ~1 frame at 30fps
           } else {
             seekBackward();
           }
@@ -516,6 +539,8 @@ export default function VideoEditor() {
           e.preventDefault();
           if (e.shiftKey) {
             handleSelection(1);
+          } else if (e.ctrlKey) {
+            seekVirtual(0.033); // ~1 frame at 30fps
           } else {
             seekForward();
           }
@@ -552,7 +577,7 @@ export default function VideoEditor() {
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [isPlaying, currentTime, totalDuration, segments, selection, zoomLevel, canvasWidth]);
+  }, [isPlaying, currentTime, segments, selection, zoomLevel, canvasWidth]);
 
   // Save edited video info
   const handleSave = () => {
@@ -708,7 +733,7 @@ export default function VideoEditor() {
         >
           <canvas 
             ref={canvasRef}
-            width={canvasWidth * zoomLevel}
+            width={actualCanvasWidth}
             height={120}
             onClick={handleWaveformClick}
             className="bg-gray-900 rounded cursor-pointer"
@@ -748,7 +773,7 @@ export default function VideoEditor() {
 
         {/* Keyboard Shortcuts Help */}
         <div className="text-xs text-gray-400 bg-gray-900 p-3 rounded">
-          <strong>Keyboard Shortcuts:</strong> Space/K: Play/Pause | Shift+←/→: Select | Del: Delete Selection | ←/→: Seek | ↑/↓: Zoom | H: Jump to Start | 1/2/3/4: Speed | Click waveform to seek
+          <strong>Keyboard Shortcuts:</strong> Space/K: Play/Pause | Shift+←/→: Select | Esc: Clear selection | Del: Delete Selection | ←/→: Seek | Ctrl+←/→: Frame step | ↑/↓: Zoom | H: Jump to Start | 1/2/3/4: Speed | Click waveform to seek
         </div>
       </div>
     </div>
