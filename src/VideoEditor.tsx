@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Save, Play, Pause, Trash2, FolderOpen } from 'lucide-react';
+import { Upload, Save, Play, Pause, Trash2, FolderOpen, X } from 'lucide-react';
 
 export default function VideoEditor() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -37,6 +37,7 @@ export default function VideoEditor() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const selectionRepeatCount = useRef(0);
 
   // Cleanup object URL on unmount
   useEffect(() => {
@@ -374,8 +375,9 @@ export default function VideoEditor() {
   };
   
   // Selection handling
-  const handleSelection = (direction: 1 | -1) => { // 1 for right, -1 for left
-    const step = 0.1; // Selection granularity
+  const handleSelection = (direction: 1 | -1, stepMultiplier: number = 1) => { // 1 for right, -1 for left
+    const baseStep = 0.1; // Base selection granularity
+    const step = baseStep * stepMultiplier;
     
     if (!selection) {
       // Start new selection from current time
@@ -528,7 +530,15 @@ export default function VideoEditor() {
         case 'arrowleft':
           e.preventDefault();
           if (e.shiftKey) {
-            handleSelection(-1);
+            // Acceleration: increase step size based on repeat count
+            if (e.repeat) {
+              selectionRepeatCount.current += 1;
+            } else {
+              selectionRepeatCount.current = 0;
+            }
+            // Exponential acceleration: 1, 1.5, 2.25, 3.38, 5.06, etc.
+            const multiplier = Math.pow(1.5, Math.min(selectionRepeatCount.current / 3, 10));
+            handleSelection(-1, multiplier);
           } else if (e.ctrlKey) {
             seekVirtual(-0.033); // ~1 frame at 30fps
           } else {
@@ -538,7 +548,15 @@ export default function VideoEditor() {
         case 'arrowright':
           e.preventDefault();
           if (e.shiftKey) {
-            handleSelection(1);
+            // Acceleration: increase step size based on repeat count
+            if (e.repeat) {
+              selectionRepeatCount.current += 1;
+            } else {
+              selectionRepeatCount.current = 0;
+            }
+            // Exponential acceleration: 1, 1.5, 2.25, 3.38, 5.06, etc.
+            const multiplier = Math.pow(1.5, Math.min(selectionRepeatCount.current / 3, 10));
+            handleSelection(1, multiplier);
           } else if (e.ctrlKey) {
             seekVirtual(0.033); // ~1 frame at 30fps
           } else {
@@ -553,8 +571,17 @@ export default function VideoEditor() {
           e.preventDefault();
           setZoomLevel(prev => Math.max(prev / 1.5, 1));
           break;
-        case 'h':
+        case 'home':
           seekToStart();
+          break;
+        case 'end':
+          e.preventDefault();
+          const vDuration = getVirtualDuration();
+          const { sourceTime } = getSourceFromVirtual(vDuration);
+          if (videoRef.current) {
+            videoRef.current.currentTime = sourceTime;
+            setCurrentTime(vDuration);
+          }
           break;
         case '1':
           setPlaybackRate(0.5);
@@ -575,9 +602,38 @@ export default function VideoEditor() {
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Reset acceleration when key is released
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        selectionRepeatCount.current = 0;
+      }
+    };
+
     window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyPress);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
   }, [isPlaying, currentTime, segments, selection, zoomLevel, canvasWidth]);
+
+  // Close video and reset state
+  const handleCloseVideo = () => {
+    if (videoUrl) {
+      URL.revokeObjectURL(videoUrl);
+    }
+    setVideoFile(null);
+    setVideoUrl(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setSegments([]);
+    setWaveformSamples([]);
+    setSelection(null);
+    setZoomLevel(1);
+    setPlaybackRate(1);
+    setError(null);
+    setDebugInfo('');
+  };
 
   // Save edited video info
   const handleSave = () => {
@@ -670,6 +726,14 @@ export default function VideoEditor() {
             Open Video
             <input type="file" accept="video/*" onChange={handleFileOpen} className="hidden" />
           </label>
+          <button 
+            onClick={handleCloseVideo}
+            disabled={!videoFile}
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50 rounded flex items-center gap-2"
+          >
+            <X size={18} />
+            Close Video
+          </button>
           <label className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded cursor-pointer flex items-center gap-2 disabled:bg-gray-600 disabled:cursor-not-allowed">
             <FolderOpen size={18} />
             Load Edits
@@ -773,7 +837,7 @@ export default function VideoEditor() {
 
         {/* Keyboard Shortcuts Help */}
         <div className="text-xs text-gray-400 bg-gray-900 p-3 rounded">
-          <strong>Keyboard Shortcuts:</strong> Space/K: Play/Pause | Shift+←/→: Select | Esc: Clear selection | Del: Delete Selection | ←/→: Seek | Ctrl+←/→: Frame step | ↑/↓: Zoom | H: Jump to Start | 1/2/3/4: Speed | Click waveform to seek
+          <strong>Keyboard Shortcuts:</strong> Space/K: Play/Pause | Shift+←/→: Select | Esc: Clear selection | Del: Delete Selection | ←/→: Seek | Ctrl+←/→: Frame step | ↑/↓: Zoom | Home/End: Jump to Start/End | 1/2/3/4: Speed | Click waveform to seek
         </div>
       </div>
     </div>
