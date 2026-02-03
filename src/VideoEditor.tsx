@@ -376,7 +376,7 @@ export default function VideoEditor() {
   
   // Selection handling
   const handleSelection = (direction: 1 | -1, stepMultiplier: number = 1) => { // 1 for right, -1 for left
-    const baseStep = 0.1; // Base selection granularity
+    const baseStep = 0.04; // Base selection granularity (more precise)
     const step = baseStep * stepMultiplier;
     
     if (!selection) {
@@ -565,7 +565,7 @@ export default function VideoEditor() {
           break;
         case 'arrowup':
           e.preventDefault();
-          setZoomLevel(prev => Math.min(prev * 1.5, 20)); // Increased zoom steps
+          setZoomLevel(prev => Math.min(prev * 1.5, 50)); // Max zoom level
           break;
         case 'arrowdown':
           e.preventDefault();
