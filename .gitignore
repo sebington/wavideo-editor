@@ -33,5 +33,9 @@ dist-ssr
 # PI session logs
 pi-session-*.html
 
+# Project context/session files (agent instructions)
+AGENTS.md
+STATE.md
+
 # Backup/Reference files
 sound-video-editor-v6.tsx
